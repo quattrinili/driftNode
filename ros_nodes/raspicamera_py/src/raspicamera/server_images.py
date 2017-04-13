@@ -1,0 +1,258 @@
+import gflags # arguments
+
+import os # APIs for paths and running terminal commands
+import sys # for reading commandline arguments and exit
+
+import datetime # time to string
+import time # sleep and time to string
+
+import socket # Socket APIs
+
+import raspicamera
+import cv2 # OpenCV APIs
+
+import rospy # ROS APIs
+from cv_bridge import CvBridge, CvBridgeError # conversion from OpenCV to ROS
+from sensor_msgs.msg import CameraInfo, Image, CompressedImage # ROS messages
+import camera_info_manager # service for the camera calibration
+
+# Parameters for connection
+gflags.DEFINE_string("ip_address", "", "IP address (if empty string, then act as server; otherwise, scp from the specified IP address")
+gflags.DEFINE_integer("port", 5001, "Port number")
+gflags.DEFINE_integer("connection_timeout", 30, "Timeout for waiting a client to set the image")
+gflags.DEFINE_string("username", "pi", "Username for sshing")
+
+# Parameters for camera
+gflags.DEFINE_integer("image_width", 640, "Image width")
+gflags.DEFINE_integer("image_height", 480, "Image height")
+gflags.DEFINE_integer("fps", 10, "Frame rate")
+gflags.DEFINE_integer("quality", 95, "Quality of compression")
+gflags.DEFINE_integer("shutter_speed", 4000, "Shutter speed (microseconds), 0 to let it automatically find")
+gflags.DEFINE_integer("iso", 0, "ISO value")
+gflags.DEFINE_integer("recovery_mechanism", 1, "Recovery mechanism (0: leave auto; 1: set fixed from existing file, otherwise auto; 2: set manual)")
+gflags.DEFINE_float("epsilon", 0.01, "Epsilon for matching the analog and digital gains")
+
+# Parameters for saving/reading
+gflags.DEFINE_string("save_dir", "/home/pi/ros_catkin_ws/src/Nodes/raspicamera_py/calibrations/", "Directory where to save parameters")
+gflags.DEFINE_string("camera_calibration_url", "package://raspicamera_py/calibrations/camera.yaml", "Camera calibration file")
+gflags.DEFINE_string("parameters_file_name", "camera-parameters", "Camera parameters")
+gflags.DEFINE_string("parameters_file_format", "yaml", "File format to save the camera parameters")
+gflags.DEFINE_boolean("backup", True, "Save a backup of the parameters file format")
+gflags.DEFINE_string("date_format", "%Y-%m-%d-%H-%M-%S", "Date format for the files")
+
+# Parameters for ROS messages
+gflags.DEFINE_boolean("compressed_image", True, "Compressed image (True) or not (False)")
+gflags.DEFINE_string("compression_format", "jpg", "Compression format (jpg or png)")
+gflags.DEFINE_string("tf_prefix", "", "TF prefix")
+gflags.DEFINE_string("camera_name", "camera", "Camera name used for the topics")
+
+
+
+def camera_talker(camera):
+		#camera.led = True
+		# Camera calibration topic initialization
+		camera_calibration = camera_info_manager.CameraInfoManager(cname=gflags.FLAGS.camera_name, url=gflags.FLAGS.camera_calibration_url, namespace=gflags.FLAGS.camera_name)
+		camera_calibration.loadCameraInfo()
+		camera_info_pub = rospy.Publisher(os.path.join(gflags.FLAGS.camera_name, "camera_info"), CameraInfo, queue_size=1)
+		
+		# Camera topic initialization
+		if gflags.FLAGS.compressed_image:
+			  camera_pub = rospy.Publisher(os.path.join(gflags.FLAGS.camera_name, "image_raw/compressed"), CompressedImage, queue_size=1)  #declaring the publisher
+		else:
+			  camera_pub = rospy.Publisher(os.path.join(gflags.FLAGS.camera_name, "image_raw"), Image, queue_size=1)  #declaring the publisher
+		  
+		# Initialization of the node
+		rospy.init_node('camera_talker', anonymous=True)
+		r = rospy.Rate(gflags.FLAGS.fps)
+		
+		while not rospy.is_shutdown():
+				try:
+						# Capturing of the stream
+						camera.stream.seek(0)
+						camera.camera.capture(camera.stream, format="bgr", use_video_port=True, resize=(gflags.FLAGS.image_width,gflags.FLAGS.image_height))
+						image = camera.stream.array
+						
+						# Setting of the image message
+						current_time = rospy.get_rostime()
+						if gflags.FLAGS.compressed_image:
+						  img_msg = CompressedImage()
+						  img_msg.format = gflags.FLAGS.compression_format
+						  img_msg.data = cv2.imencode('.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), gflags.FLAGS.quality])[1].tostring()
+						else:
+						  img_msg = bridge.cv2_to_imgmsg(image, "bgr8")
+						img_msg.header.stamp.secs = current_time.secs
+						img_msg.header.stamp.nsecs = current_time.nsecs
+						img_msg.header.frame_id = os.path.join(gflags.FLAGS.tf_prefix, 'camera_optical')
+
+						# Setting of the camera calibration message
+						if camera_calibration.isCalibrated():
+						  camera_info_msg = camera_calibration.getCameraInfo()
+						else:
+						  camera_info_msg = CameraInfo()
+						camera_info_msg.header = img_msg.header
+					 
+						# Publish messages
+						camera_info_pub.publish(camera_info_msg)
+						camera_pub.publish(img_msg)
+
+				except:
+						camera.stream.truncate()
+						print "Error"
+
+def setting_recovery(camera):
+    if gflags.FLAGS.recovery_mechanism == 0:
+        camera.set_auto_mode()
+    elif gflags.FLAGS.recovery_mechanism == 1:
+        camera_parameters_files = [f for f in os.listdir(gflags.FLAGS.save_dir) if os.path.isfile(os.path.join(gflags.FLAGS.save_dir, f)) and gflags.FLAGS.parameters_file_name + '_' in f]
+        camera_parameters_files = sorted(camera_parameters_files, key=lambda f: datetime.datetime.strptime(os.path.splitext(f)[0].split('_')[1], gflags.FLAGS.date_format), reverse=True)
+        if camera_parameters_files:
+            camera_parameters_file = os.path.join(gflags.FLAGS.save_dir, camera_parameters_files[0])
+            camera.load_camera_parameters(camera_parameters_file)
+        else:
+            camera.set_auto_mode()
+    elif gflags.FLAGS.recovery_mechanism == 2:
+        camera.set_manual_mode()
+        camera.save_camera_parameters()          
+
+
+if __name__ == "__main__":
+  # Processing of the arguments through gflags
+  try:
+    sys.argv = gflags.FLAGS(sys.argv)
+  except gflags.FlagsError, e:
+    print "ERROR"
+    sys.exit(1)
+
+  # Initialization of the camera
+  camera = raspicamera.raspicamera(image_width=gflags.FLAGS.image_width, 
+                                    image_height=gflags.FLAGS.image_height,
+                                    fps=gflags.FLAGS.fps,
+                                    shutter_speed=gflags.FLAGS.shutter_speed,
+                                    iso=gflags.FLAGS.iso,
+                                    eps=gflags.FLAGS.epsilon,
+                                    timeout=gflags.FLAGS.connection_timeout,
+                                    save_dir=gflags.FLAGS.save_dir,
+                                    parameters_file_name=gflags.FLAGS.parameters_file_name,
+                                    parameters_file_format=gflags.FLAGS.parameters_file_format,
+                                    date_format=gflags.FLAGS.date_format,
+                                    backup=gflags.FLAGS.backup)
+
+  camera_setting_state = 0 # 0 Not set; 1 should be set; 2 recovery
+  # Camera that should be set by itself
+  if not gflags.FLAGS.ip_address:
+    # Initialization of the socket
+    try:
+      sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      sock.settimeout(gflags.FLAGS.connection_timeout)
+      print "Created socket"
+    except socket.error, msg:
+      camera_setting_state = 2
+      print "Failed to create a socket"
+
+    try:
+      sock.bind((gflags.FLAGS.ip_address, gflags.FLAGS.port))
+      sock.listen(1)
+      print "Address bound"
+    except socket.error, msg:
+      print "Failed to bind"
+      camera_setting_state = 2
+    
+    # Waiting for the user to connect
+    print "waiting for user" 
+    try:    
+      conn, addr = sock.accept()
+      connected = True
+    except:
+      print "timeout"
+      camera_setting_state = 2 
+
+    if camera_setting_state == 0:
+      print "Connected ", addr 
+      state = 0 # 0: not set yet, 1: checking, 2: done
+      #led = True
+      while state != 2 and camera_setting_state == 0:
+        """ TODO LED
+        led = not led
+        camera.led = led
+        """
+        # Capturing image
+        camera.camera.capture(camera.stream, format="bgr", use_video_port=True, resize=(gflags.FLAGS.image_width,gflags.FLAGS.image_height))
+        image = camera.stream.array
+
+        # Transmitting image        
+        s = image.tostring()
+        for i in xrange(20):
+            try:          
+                conn.send(s[i*46080:(i+1)*46080])
+            except:
+              camera_setting_state = 2
+  
+        # TODO just for debug
+        # display the image on the screen and wait for a keypress
+        #cv2.imshow("Image", image)
+        #key = cv2.waitKey(100/30)
+        
+        # Answer from the user
+        print "waiting for answer"
+        answer = conn.recv(1024)
+        print "received ", answer
+        if state == 0:
+          if answer == 'y':
+            # Set manual mode
+            camera.set_manual_mode()
+            state = 1
+            print "Saved"
+            time.sleep(1.0)
+        elif state == 1:
+          if answer == 'n':
+            print "Saving parameters"
+            camera.save_camera_parameters()
+            camera_setting_state = 1
+            state = 2
+            break
+          elif answer == 'r':
+            print "resetting"
+            camera.set_auto_mode()
+            state = 0
+    
+        camera.stream.truncate(0)
+
+      conn.close()
+    elif camera_setting_state == 2:
+      print "NOT Connected"
+      setting_recovery(camera)
+      
+  # Camera that should be set according to another camera (IP_address)    
+  else:
+    copied = False
+    led = True
+
+    start = time.time()
+    print "Waiting for master"
+    while not copied and time.time() - start < gflags.FLAGS.connection_timeout:
+      """
+      led = not led
+      camera.led = led
+      camera.led = not camera.led
+      """
+      # Note that it is assumed that the folders are the same
+      # Note that it is assumed that camera-parameters.yaml is created after the drifter acting as master being set
+      camera_parameters_file = os.path.join(gflags.FLAGS.save_dir, ''.join([gflags.FLAGS.parameters_file_name, os.extsep, gflags.FLAGS.parameters_file_format]))
+      ret = os.system("scp " + "-o ConnectTimeout=" + str(gflags.FLAGS.connection_timeout) + " "  + gflags.FLAGS.username + '@' + gflags.FLAGS.ip_address + ':' + camera_parameters_file + ' ' + camera_parameters_file)
+      if ret == 0:
+        copied = True
+      else:
+        time.sleep(3.0)
+
+    if copied:
+        # Loading of the camera parameters
+        camera.load_camera_parameters(camera_parameters_file)
+    else:
+        setting_recovery(camera)
+
+  # Running of the ROS publisher
+  try:
+    print "Running ROS camera talker"
+    camera_talker(camera)
+  except rospy.ROSInterruptException:
+    camera.camera.close()
