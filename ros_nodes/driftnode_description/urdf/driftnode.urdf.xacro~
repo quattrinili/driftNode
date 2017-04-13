@@ -1,0 +1,157 @@
+<?xml version="1.0"?>
+<!--
+Software License Agreement (BSD)
+
+\file      driftnode.urdf.xacro
+\authors   Alberto Quattrini Li <albertoq@cse.sc.edu>
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+the following conditions are met:
+ * Redistributions of source code must retain the above copyright notice, this list of conditions and the
+   following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
+   following disclaimer in the documentation and/or other materials provided with the distribution.
+ * Neither the name of Clearpath Robotics nor the names of its contributors may be used to endorse or promote
+   products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WAR-
+RANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, IN-
+DIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-->
+<robot name="driftnode" xmlns:xacro="http://ros.org/wiki/xacro">
+
+
+  <property name="M_PI" value="3.14159"/>
+
+  <!-- Base Size -->
+  <property name="base_x_size" value="0.11" />
+  <property name="base_y_size" value="0.11" />
+  <property name="base_z_size" value="0.5" />
+
+  <xacro:macro name="driftnode">
+
+    <!-- Base footprint is bottom disk of the robot where the camera is -->
+    <link name="base_footprint"/>
+
+
+    <!-- Base link is the center of the driftnode's tube -->
+    <link name="base_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <box size="${base_x_size} ${base_y_size} ${base_z_size}"/>
+        </geometry>
+        <material name="white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${base_z_size/4}" rpy="0 0 0" />
+        <geometry>
+          <!--box size="${base_x_size} ${base_y_size} ${base_z_size}"/-->
+          <cylinder radius="${base_x_size}" length="${base_z_size}"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0 0 ${base_z_size*3/4}" rpy="0 0 0" />
+        <geometry>
+          <cylinder radius="${base_x_size}" length="${base_z_size}"/>
+        </geometry>
+      </collision>
+    </link>
+    <joint name="base_joint" type="fixed">
+      <origin xyz="0 0 ${base_z_size / 2}" rpy="0 0 0" />
+      <parent link="base_footprint" />
+      <child link="base_link" />
+    </joint>
+
+
+    <!-- Interial link stores the robot's inertial information -->
+    <link name="inertial_link">
+      <inertial>
+        <mass value="0.001" />
+        <origin xyz="0 0 0" />
+        <inertia ixx="0.0001" ixy="0" ixz="0"
+                 iyy="0.000001" iyz="0"
+                 izz="0.0001" />
+      </inertial>
+    </link>
+
+    <joint name="inertial_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <parent link="base_link" />
+      <child link="inertial_link" />
+    </joint>
+
+    <!-- IMU Link is the mounting position for the IMU.-->
+    <!-- Can be modified with environment variables in /etc/ros/setup.bash -->
+    <link name="imu_link"/>
+    <joint name="imu_joint" type="fixed">
+      <origin xyz="$(optenv DRIFTNODE_IMU_XYZ -0.06 0 -0.048)" rpy="$(optenv DRIFTNODE_IMU_RPY 0 0 0)" />
+      <parent link="base_link" />
+      <child link="imu_link" />
+    </joint>
+
+
+    <!-- Camera -->
+    <joint name="camera_joint" type="fixed">
+      <axis xyz="0 1 0"/>
+      <parent link="base_footprint"/>
+      <child link="camera_optical"/>
+      <origin xyz="0.0 -0.018 0" rpy="0.0 ${M_PI} 1.5708"/>
+    </joint>
+    <link name="camera_optical">
+      <collision>
+        <origin xyz="0 -0.018 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.02 0.02"/>
+        </geometry>
+      </collision>
+      <visual>
+        <origin xyz="0 -0.018 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.02 0.02"/>
+        </geometry>
+         <material name="red"/>
+      </visual>
+
+      <inertial>
+        <mass value="1e-5" />
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6" />
+      </inertial>
+    </link>
+
+    <!-- GPS -->
+    <joint name="gps_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="gps_link"/>
+      <origin xyz="0 0 ${base_z_size / 2}" rpy="0 0 0" />
+    </joint>
+    <link name="gps_link">
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.025 0.025 0.025"/>
+        </geometry>
+      </collision>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.025 0.025 0.025"/>
+        </geometry>
+        <material name="red"/>
+      </visual>
+
+      <inertial>
+        <mass value="1e-5" />
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6" />
+      </inertial>
+    </link>
+
+  </xacro:macro>
+
+</robot>

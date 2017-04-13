@@ -1,0 +1,5 @@
+{analog_gain: !!python/object/apply:fractions.Fraction ['8'], awb_gains: !!python/tuple [
+    !!python/object/apply:fractions.Fraction [19/16], !!python/object/apply:fractions.Fraction [
+      51/32]], brightness: 50, contrast: 0, digital_gain: !!python/object/apply:fractions.Fraction [
+    383/256], exposure_compensation: 0, iso: !!python/long '0', saturation: 0, sharpness: 0,
+  shutter_speed: !!python/long '3982'}
